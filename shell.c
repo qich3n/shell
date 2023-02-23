@@ -20,46 +20,47 @@ int run_command(const char *command, char *output, int output_size) {
     int result = 0;
 
     num_args = 0;
-    token = strtok((char *) command, " ");
-    while (token != NULL) {
-        if (strlen(token) > 0) {
-            // check for quotes at beginning of argument
-            if (token[0] == '"' || token[0] == '\'') {
-                if (token[strlen(token) - 1] == token[0]) {
-                    // argument is fully enclosed in quotes
-                    token++;
-                    token[strlen(token) - 1] = '\0';
-                } else {
-                    // argument starts with quotes but does not end with them
-                    // continue parsing quoted argument
-                    int arg_len = strlen(token);
-                    for (int i = 1; i < strlen(token); i++) {
-                        if (token[i] == token[0]) {
-                            arg_len = i;
-                            break;
-                        }
-                    }
-                    char *arg = malloc(arg_len);
-                    strncpy(arg, token + 1, arg_len - 1);
-                    arg[arg_len - 1] = '\0';
-                    args[num_args] = arg;
-                    num_args++;
-                    continue;
-                }
+    int in_quotes = 0;  // flag to track if currently inside quotes
+    char *arg = NULL;   // pointer to the current argument being built
+    int command_len = strlen(command);
+    for (int i = 0; i < command_len; i++) {
+        char c = command[i];
+        if (c == ' ' && !in_quotes) {
+            // end of an argument
+            if (arg != NULL) {
+                args[num_args] = arg;
+                num_args++;
+                arg = NULL;
             }
-
-            int arg_len = strlen(token);
-            char *arg = malloc(arg_len + 1);
-            strncpy(arg, token, arg_len);
-            arg[arg_len] = '\0';
-            args[num_args] = arg;
-            num_args++;
+        } else if (c == '"' || c == '\'') {
+            // toggle in_quotes flag
+            if (in_quotes && arg != NULL) {
+                args[num_args] = arg;
+                num_args++;
+                arg = NULL;
+            }
+            in_quotes = !in_quotes;
+        } else {
+            // add character to current argument
+            if (arg == NULL) {
+                arg = malloc(MAX_COMMAND_LENGTH);
+                arg[0] = '\0';
+            }
+            int arg_len = strlen(arg);
+            if (arg_len < MAX_COMMAND_LENGTH - 1) {
+                arg[arg_len] = c;
+                arg[arg_len+1] = '\0';
+            }
         }
-        token = strtok(NULL, " ");
     }
-    args[num_args] = NULL;
+    if (arg != NULL) {
+        args[num_args] = arg;
+        num_args++;
+    }
 
     if (num_args > 0) {
+        args[num_args] = NULL;
+
         pid_t pid = fork();
         if (pid == 0) {
             // child process
@@ -86,6 +87,7 @@ int run_command(const char *command, char *output, int output_size) {
 
     return result;
 }
+
 int run_commands(const char *commands, char *output, int output_size) {
     char command[MAX_COMMAND_LENGTH];
     int num_commands = 1;
@@ -132,7 +134,15 @@ int run_commands(const char *commands, char *output, int output_size) {
         // run the current command and append its output to the result
         char command_output[MAX_OUTPUT_LENGTH];
         int command_status = run_command(command_list[i], command_output, MAX_OUTPUT_LENGTH);
-        strncat(output, command_output, output_size - strlen(output) - 1);
+        if (command_output[0] == '\'') {
+            // Output string without single quotes
+            strncat(output, " ", output_size - strlen(output) - 1);
+            strncat(output, command_output + 1, output_size - strlen(output) - 1);
+            output[strlen(output) - 1] = '\0'; // Remove the last quote
+        } else {
+            strncat(output, command_output, output_size - strlen(output) - 1);
+        }
+
         if (command_status != 0) {
             result = command_status;
             break;
@@ -169,12 +179,22 @@ int main(int argc, char **argv) {
             break;
         }
 
+        // run the command and get its return status
         int result = run_commands(command, command_output, MAX_OUTPUT_LENGTH);
-        if (result != 0) {
-            printf("Command failed with status %d.\n", result);
-        } else {
-            printf("%s", command_output);
+
+        // print the output of the command
+        int command_output_len = strlen(command_output);
+        if (command_output_len > 0) {
+            // remove any trailing newline characters from the command output
+            if (command_output[command_output_len - 1] == '\n') {
+                command_output[command_output_len - 1] = '\0';
+            }
+
+            printf("%s\n", command_output);
         }
+
+        // clear the command output buffer
+        command_output[0] = '\0';
     }
 
     return 0;
