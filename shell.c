@@ -62,21 +62,40 @@ int run_command(const char *command, char *output, int output_size) {
     if (num_args > 0) {
         args[num_args] = NULL;
 
-        pid_t pid = fork();
-        if (pid == 0) {
-            // child process
-            if (execvp(args[0], args) == -1) {
-                perror(args[0]);
-                exit(1);
-            }
-        } else if (pid == -1) {
-            perror("fork");
-            result = 1;
-        } else {
-            // parent process
-            if (waitpid(pid, &status, 0) == -1) {
-                perror("waitpid");
+        if (strcmp(args[0], "cd") == 0) {
+            // change the working directory
+            if (num_args == 1) {
+                // no argument provided, change to home directory
+                const char *home = getenv("HOME");
+                if (home == NULL) {
+                    home = "/";
+                }
+                if (chdir(home) != 0) {
+                    perror("chdir");
+                    result = 1;
+                }
+            } else if (chdir(args[1]) != 0) {
+                // change to the directory provided as the first argument
+                perror(args[1]);
                 result = 1;
+            }
+        } else {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // child process
+                if (execvp(args[0], args) == -1) {
+                    perror(args[0]);
+                    exit(1);
+                }
+            } else if (pid == -1) {
+                perror("fork");
+                result = 1;
+            } else {
+                // parent process
+                if (waitpid(pid, &status, 0) == -1) {
+                    perror("waitpid");
+                    result = 1;
+                }
             }
         }
 
