@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 
 #define MAX_COMMAND_LENGTH 255
-#define MAX_ARGS 128
+#define MAX_ARGS 64
 #define MAX_OUTPUT_LENGTH 4096
 
 int is_exit_command(const char *command) {
@@ -134,11 +134,11 @@ int run_commands(const char *commands, char *output, int output_size) {
         // run the current command and append its output to the result
         char command_output[MAX_OUTPUT_LENGTH];
         int command_status = run_command(command_list[i], command_output, MAX_OUTPUT_LENGTH);
-        if (command_output[0] == '\'') {
-            // Output string without single quotes
+        if (command_output[0] == '"' || command_output[0] == '\'') {
+            // output string without quotes
             strncat(output, " ", output_size - strlen(output) - 1);
             strncat(output, command_output + 1, output_size - strlen(output) - 1);
-            output[strlen(output) - 1] = '\0'; // Remove the last quote
+            output[strlen(output) - 1] = '\0'; // remove the last quote
         } else {
             strncat(output, command_output, output_size - strlen(output) - 1);
         }
