@@ -57,10 +57,9 @@ int run_command(const char *command, char *output, int output_size) {
         args[num_args] = arg;
         num_args++;
     }
+    args[num_args] = NULL;  // add a NULL pointer to terminate the array
 
     if (num_args > 0) {
-        args[num_args] = NULL;
-
         pid_t pid = fork();
         if (pid == 0) {
             // child process
