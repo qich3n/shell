@@ -22,9 +22,9 @@ int run_command(const char *command, char *output, int output_size) {
     num_args = 0;
     int in_quotes = 0;  // flag to track if currently inside quotes
     char *arg = NULL;   // pointer to the current argument being built
-    int command_len = strlen(command);
-    for (int i = 0; i < command_len; i++) {
-        char c = command[i];
+    const char *p = command;
+    while (*p != '\0') {
+        char c = *p;
         if (c == ' ' && !in_quotes) {
             // end of an argument
             if (arg != NULL) {
@@ -52,14 +52,16 @@ int run_command(const char *command, char *output, int output_size) {
                 arg[arg_len+1] = '\0';
             }
         }
+        p++;
     }
     if (arg != NULL) {
         args[num_args] = arg;
         num_args++;
     }
-    args[num_args] = NULL;  // add a NULL pointer to terminate the array
 
     if (num_args > 0) {
+        args[num_args] = NULL;
+
         pid_t pid = fork();
         if (pid == 0) {
             // child process
@@ -118,13 +120,16 @@ int run_commands(const char *commands, char *output, int output_size) {
             p++;
         }
         command[j] = '\0';
-        command_list[i] = calloc(j + 1, sizeof(char));
-        strncpy(command_list[i], command, j + 1);
-        i++;
+        if (j > 0) { // only add non-empty commands to the list
+            command_list[i] = malloc(j + 1);
+            strncpy(command_list[i], command, j + 1);
+            i++;
+        }
         if (*p == ';') {
             p++;
         }
     }
+    num_commands = i; // update the number of commands in the list
 
     // process each command in sequence
     int result = 0;
