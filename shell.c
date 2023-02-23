@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,146 +80,171 @@ int run_command(const char *command, char *output, int output_size) {
                 perror(args[1]);
                 result = 1;
             }
-        } else {
-            pid_t pid = fork();
-            if (pid == 0) {
-                // child process
-                if (execvp(args[0], args) == -1) {
-                    perror(args[0]);
-                    exit(1);
-                }
-            } else if (pid == -1) {
-                perror("fork");
+        } else if (strcmp(args[0], "source") == 0) {
+            // execute commands from a file
+            if (num_args == 1) {
+                // no file name provided
+                fprintf(stderr, "Usage: source <file>\n");
                 result = 1;
             } else {
-                // parent process
-                if (waitpid(pid, &status, 0) == -1) {
-                    perror("waitpid");
+                FILE *file = fopen(args[1], "r");
+                if (file == NULL) {
+                    // error opening file
+                    perror(args[1]);
                     result = 1;
+                } else {
+                    char line[MAX_COMMAND_LENGTH];
+                    while (fgets(line, MAX_COMMAND_LENGTH, file) != NULL) {
+                        line[strcspn(line, "\n")] = '\0';  // remove newline from input
+      if (strlen(line) > 0) {
+                        // only process non-empty lines
+                        int status = run_command(line, output, output_size);
+                        if (status != 0) {
+                            result = status;
+                            break;
+                        }
+                    }
                 }
+                fclose(file);
             }
         }
-
-        // free memory allocated for arguments
-        for (int i = 0; i < num_args; i++) {
-            free(args[i]);
+    } else {
+        pid_t pid = fork();
+        if (pid == 0) {
+            // child process
+            if (execvp(args[0], args) == -1) {
+                perror(args[0]);
+                exit(1);
+            }
+        } else if (pid == -1) {
+            perror("fork");
+            result = 1;
+        } else {
+            // parent process
+            if (waitpid(pid, &status, 0) == -1) {
+                perror("waitpid");
+                result = 1;
+            }
         }
     }
 
-    return result;
+    // free memory allocated for arguments
+    for (int i = 0; i < num_args; i++) {
+        free(args[i]);
+    }
 }
 
+return result;
+}
 int run_commands(const char *commands, char *output, int output_size) {
-    char command[MAX_COMMAND_LENGTH];
-    int num_commands = 1;
-    const char *p = commands;
+char command[MAX_COMMAND_LENGTH];
+int num_commands = 1;
+const char *p = commands;
+// count the number of commands
+while (*p != '\0') {
+    if (*p == ';') {
+        num_commands++;
+    }
+    p++;
+}
 
-    // count the number of commands
-    while (*p != '\0') {
-        if (*p == ';') {
-            num_commands++;
+// allocate an array to hold the commands
+char *command_list[num_commands];
+
+// split the commands into the array
+int i = 0;
+p = commands;
+while (*p != '\0' && i < num_commands) {
+    int j = 0;
+    int in_quotes = 0;
+    while (*p != '\0' && (*p != ';' || in_quotes)) {
+        if (*p == '"' || *p == '\'') {
+            in_quotes = !in_quotes;
         }
+        command[j] = *p;
+        j++;
         p++;
     }
-
-    // allocate an array to hold the commands
-    char *command_list[num_commands];
-
-    // split the commands into the array
-    int i = 0;
-    p = commands;
-    while (*p != '\0' && i < num_commands) {
-        int j = 0;
-        int in_quotes = 0;
-        while (*p != '\0' && (*p != ';' || in_quotes)) {
-            if (*p == '"' || *p == '\'') {
-                in_quotes = !in_quotes;
-            }
-            command[j] = *p;
-            j++;
-            p++;
-        }
-        command[j] = '\0';
-        if (j > 0) { // only add non-empty commands to the list
-            command_list[i] = malloc(j + 1);
-            strncpy(command_list[i], command, j + 1);
-            i++;
-        }
-        if (*p == ';') {
-            p++;
-        }
+    command[j] = '\0';
+    if (j > 0) { // only add non-empty commands to the list
+        command_list[i] = malloc(j + 1);
+        strncpy(command_list[i], command, j + 1);
+        i++;
     }
-    num_commands = i; // update the number of commands in the list
+    if (*p == ';') {
+        p++;
+    }
+}
+num_commands = i; // update the number of commands in the list
 
-    // process each command in sequence
-    int result = 0;
-    output[0] = '\0';
-    for (int i = 0; i < num_commands; i++) {
-        // run the current command and append its output to the result
-        char command_output[MAX_OUTPUT_LENGTH];
-        int command_status = run_command(command_list[i], command_output, MAX_OUTPUT_LENGTH);
-        if (command_output[0] == '\'') {
-            // Output string without single quotes
-            strncat(output, " ", output_size - strlen(output) - 1);
-            strncat(output, command_output + 1, output_size - strlen(output) - 1);
-            output[strlen(output) - 1] = '\0'; // Remove the last quote
-        } else {
-            strncat(output, command_output, output_size - strlen(output) - 1);
-        }
-
-        if (command_status != 0) {
-            result = command_status;
-            break;
-        }
-
-        // free the memory allocated for the current command
-        free(command_list[i]);
+// process each command in sequence
+int result = 0;
+output[0] = '\0';
+for (int i = 0; i < num_commands; i++) {
+    // run the current command and append its output to the result
+    char command_output[MAX_OUTPUT_LENGTH];
+    int command_status = run_command(command_list[i], command_output, MAX_OUTPUT_LENGTH);
+    if (command_output[0] == '\'') {
+        // Output string without single quotes
+        strncat(output, " ", output_size - strlen(output) - 1);
+        strncat(output, command_output + 1, output_size - strlen(output) - 1);
+        output[strlen(output) - 1] = '\0'; // Remove the last quote
+    } else {
+        strncat(output, command_output, output_size - strlen(output) - 1);
     }
 
-    return WIFEXITED(result) ? WEXITSTATUS(result) : -1;
+    if (command_status != 0) {
+        result = command_status;
+        break;
+    }
+
+    // free the memory allocated for the current command
+    free(command_list[i]);
 }
 
+return WIFEXITED(result) ? WEXITSTATUS(result) : -1;
+}
 int main(int argc, char **argv) {
-    printf("Welcome to mini-shell.\n");
-    char command[MAX_COMMAND_LENGTH];
-    char command_output[MAX_OUTPUT_LENGTH];
-    int status;
+printf("Welcome to mini-shell.\n");
+char command[MAX_COMMAND_LENGTH];
+char command_output[MAX_OUTPUT_LENGTH];
+int status;
 
-    while (1) {
-        printf("shell $ ");  // display prompt
-        if (fgets(command, MAX_COMMAND_LENGTH, stdin) == NULL) {
-            if (feof(stdin)) {  // end-of-file detected
-                printf("\nBye bye.\n");
-                break;
-            } else {
-                perror("fgets");
-                break;
-            }
-        }
-        command[strcspn(command, "\n")] = '\0';  // remove newline from input
-
-        if (is_exit_command(command)) {
-            printf("Bye bye.\n");
+while (1) {
+    printf("shell $ ");  // display prompt
+    if (fgets(command, MAX_COMMAND_LENGTH, stdin) == NULL) {
+        if (feof(stdin)) {  // end-of-file detected
+            printf("\nBye bye.\n");
+            break;
+        } else {
+            perror("fgets");
             break;
         }
+    }
+    command[strcspn(command, "\n")] = '\0';  // remove newline from input
 
-        // run the command and get its return status
-        int result = run_commands(command, command_output, MAX_OUTPUT_LENGTH);
-
-        // print the output of the command
-        int command_output_len = strlen(command_output);
-        if (command_output_len > 0) {
-            // remove any trailing newline characters from the command output
-            if (command_output[command_output_len - 1] == '\n') {
-                command_output[command_output_len - 1] = '\0';
-            }
-
-            printf("%s\n", command_output);
-        }
-
-        // clear the command output buffer
-        command_output[0] = '\0';
+    if (is_exit_command(command)) {
+        printf("Bye bye.\n");
+        break;
     }
 
-    return 0;
+    // run the command and get its return status
+    int result = run_commands(command, command_output, MAX_OUTPUT_LENGTH);
+
+    // print the output of the command
+    int command_output_len = strlen(command_output);
+    if (command_output_len > 0) {
+        // remove any trailing newline characters from the command output
+        if (command_output[command_output_len - 1] == '\n') {
+            command_output[command_output_len - 1] = '\0';
+        }
+
+        printf("%s\n", command_output);
+    }
+
+    // clear the command output buffer
+    command_output[0] = '\0';
+}
+
+return 0;
 }
