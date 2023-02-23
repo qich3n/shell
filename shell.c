@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 
 #define MAX_COMMAND_LENGTH 255
-#define MAX_ARGS 64
+#define MAX_ARGS 128
 #define MAX_OUTPUT_LENGTH 4096
 
 int is_exit_command(const char *command) {
