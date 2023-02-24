@@ -1,8 +1,5 @@
 anomia
-b
-d
-f
-d
-a
-sdsd
-sdfs
+banana
+shark
+tiger
+lion
