@@ -47,6 +47,7 @@ int run_command(const char *command, char *output, int output_size) {
   int num_args = 0;
   int result = 0;
   int in_quotes = 0;
+  char quote_char = '\0';
   char *arg = NULL;
   const char *p = command;
   int status;
@@ -60,19 +61,18 @@ int run_command(const char *command, char *output, int output_size) {
 
   while (*p != '\0') {
     char c = *p;
-    if (c == ' ' && !in_quotes) {
+    if ((c == '"' || c == '\'') && !in_quotes) {
+      in_quotes = 1;
+      quote_char = c;
+    } else if (c == quote_char) {
+      in_quotes = 0;
+      quote_char = '\0';
+    } else if (c == ' ' && !in_quotes) {
       if (arg != NULL) {
         args[num_args] = arg;
         num_args++;
         arg = NULL;
       }
-    } else if (c == '"' || c == '\'') {
-      if (in_quotes && arg != NULL) {
-        args[num_args] = arg;
-        num_args++;
-        arg = NULL;
-      }
-      in_quotes = !in_quotes;
     } else if (c == '<' && !in_quotes) {
       if (arg != NULL) {
         args[num_args] = arg;
@@ -140,7 +140,7 @@ int run_command(const char *command, char *output, int output_size) {
     // execute commands from a file
     if (num_args == 1) {
       // no file name provided
-      fprintf(stderr, "Usage: source <file>\n");
+     fprintf(stderr, "Usage: source <file>\n");
       result = 1;
     } else {
       FILE *file = fopen(args[1], "r");
@@ -148,162 +148,81 @@ int run_command(const char *command, char *output, int output_size) {
         perror(args[1]);
         result = 1;
       } else {
-        char buffer[MAX_COMMAND_LENGTH];
-        while (fgets(buffer, MAX_COMMAND_LENGTH, file)) {
-          run_command(buffer, output, output_size);
+        char line[MAX_COMMAND_LENGTH];
+        while (fgets(line, MAX_COMMAND_LENGTH, file) != NULL) {
+          if (line[strlen(line) - 1] == '\n') {
+            line[strlen(line) - 1] = '\0';
+          }
+          result = run_command(line, output, output_size);
+          if (result != 0) {
+            break;
+          }
         }
         fclose(file);
       }
     }
   } else {
-    if (is_pipeline) {
-      if (pipe(pipefd) == -1) {
-        perror("pipe");
-        return 1;
-      }
-      int pid1 = fork();
-      if (pid1 == 0) {
-        // Child process - write to pipe
-        if (close(pipefd[0]) == -1) {
-          perror("close");
+    // execute other commands
+    pid_t pid = fork();
+    if (pid == 0) {
+      // child process
+      if (is_pipeline) {
+        if (pipe(pipefd) == -1) {
+          perror("pipe");
           exit(1);
         }
-        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
-          perror("dup2");
-          exit(1);
-        }
-        if (close(pipefd[1]) == -1) {
-          perror("close");
-          exit(1);
-        }
-        execvp(args[0], args);
-        perror(args[0]);
-        exit(1);
-      } else if (pid1 == -1) {
-        perror("fork");
-        return 1;
-      } else {
-        int pid2 = fork();
-        if (pid2 == 0) {
-          // Child process - read from pipe
-          if (close(pipefd[1]) == -1) {
-            perror("close");
+
+        pid_t child_pid = fork();
+        if (child_pid == 0) {
+          // child process
+          close(pipefd[0]); // close read end of pipe
+          if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            perror("dup2");
             exit(1);
           }
+          close(pipefd[1]);
+          execvp(args[0], args);
+          perror(args[0]);
+          exit(1);
+        } else if (child_pid == -1) {
+          perror("fork");
+          exit(1);
+        } else {
+          // parent process
+          close(pipefd[1]); // close write end of pipe
           if (dup2(pipefd[0], STDIN_FILENO) == -1) {
             perror("dup2");
             exit(1);
           }
-          if (close(pipefd[0]) == -1) {
-            perror("close");
+          close(pipefd[0]);
+          if (waitpid(child_pid, &status, 0) == -1) {
+            perror("waitpid");
             exit(1);
           }
-          execvp(args[num_args-1], args+(num_args-1));
-          perror(args[num_args-1]);
-          exit(1);
-        } else if (pid2 == -1) {
-          perror("fork");
-          return 1;
-        } else {
-          if (close(pipefd[0]) == -1) {
-            perror("close");
-            return 1;
-          }
-          if (close(pipefd[1]) == -1) {
-            perror("close");
-            return 1;
-          }
-          if (waitpid(pid1, &status, 0) == -1) {
-            perror("waitpid");
-            return 1;
-          }
-          if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            result = 1;
-          }
-          if (waitpid(pid2, &status, 0) == -1) {
-            perror("waitpid");
-            return 1;
-          }
-          if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            result = 1;
-          }
         }
-      }
-    } else {
-      int pid = fork();
-      if (pid == 0) {
-        // Child process
+      } else {
+        // not a pipeline
         execvp(args[0], args);
         perror(args[0]);
         exit(1);
-      } else if (pid == -1) {
-        perror("fork");
+      }
+    } else if (pid == -1) {
+      perror("fork");
+      result = 1;
+    } else {
+      // parent process
+      if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
         result = 1;
-      } else {
-        // Parent process
-        if (waitpid(pid, &status, 0) == -1) {
-          perror("waitpid");
-          result = 1;
-        }
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-          result = 1;
-        }
+      }
+      if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        result = 1;
       }
     }
-    if (output != NULL) {
-  int output_len = strlen(previous_output);
-  if (output_len > output_size - 1) {
-    output_len = output_size - 1;
   }
-  strncpy(output, previous_output, output_len);
-  output[output_len] = '\0';
+  return result;
 }
 
-if (is_pipeline) {
-  // read from pipe and execute next command
-  if (close(pipefd[1]) == -1) {
-    perror("close");
-    exit(1);
-  }
-
-  int pid2 = fork();
-  if (pid2 == -1) {
-    perror("fork");
-    result = 1;
-  } else if (pid2 == 0) {
-    if (dup2(pipefd[0], STDIN_FILENO) == -1) {
-      perror("dup2");
-      exit(1);
-    }
-    if (close(pipefd[0]) == -1) {
-      perror("close");
-      exit(1);
-    }
-    int next_result = run_command(token_pos + 1, NULL, 0);
-    exit(next_result);
-  } else {
-    if (waitpid(pid2, &status, 0) == -1) {
-      perror("waitpid");
-      result = 1;
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-      result = 1;
-    }
-  }
-}
-
-if (result == 0 && output != NULL) {
-  int output_len = strlen(previous_output);
-  if (output_len > output_size - 1) {
-    output_len = output_size - 1;
-  }
-  strncpy(output, previous_output, output_len);
-  output[output_len] = '\0';
-}
-
-return result;
-}
-}
 
             
         
