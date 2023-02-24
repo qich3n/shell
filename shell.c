@@ -39,20 +39,27 @@ is_exit_command(const char * command) {
   return strcmp(command, "exit") == 0;
 }
 
-int run_command(const char * command, char * output, int output_size) {
+int run_command(const char *command, char *output, int output_size) {
   static char previous_command[MAX_COMMAND_LENGTH] = "";
   static char previous_output[MAX_OUTPUT_LENGTH] = "";
 
-  char * args[MAX_ARGS];
+  char *args[MAX_ARGS];
   int num_args = 0;
   int result = 0;
   int in_quotes = 0;
-  char * arg = NULL;
-  const char * p = command;
+  char *arg = NULL;
+  const char *p = command;
   int status;
+  int is_pipeline = 0;
+  int pipefd[2];
+  const char *pipe_token = "|";
+  char *token_pos = strstr(command, pipe_token);
+  if (token_pos != NULL) {
+    is_pipeline = 1;
+  }
 
-  while ( * p != '\0') {
-    char c = * p;
+  while (*p != '\0') {
+    char c = *p;
     if (c == ' ' && !in_quotes) {
       if (arg != NULL) {
         args[num_args] = arg;
@@ -76,14 +83,14 @@ int run_command(const char * command, char * output, int output_size) {
       char filename[MAX_COMMAND_LENGTH];
       p++;
       int i = 0;
-      while ( * p != '\0' && * p != ' ' && * p != '"' && * p != '\'') {
-        filename[i] = * p;
+      while (*p != '\0' && *p != ' ' && *p != '"' && *p != '\'') {
+        filename[i] = *p;
         i++;
         p++;
       }
       filename[i] = '\0';
       // open the file and redirect input
-      FILE * infile = fopen(filename, "r");
+      FILE *infile = fopen(filename, "r");
       if (infile == NULL) {
         perror(filename);
         result = 1;
@@ -117,7 +124,7 @@ int run_command(const char * command, char * output, int output_size) {
 
   if (strcmp(args[0], "cd") == 0) {
     if (num_args == 1) {
-      const char * home = getenv("HOME");
+      const char *home = getenv("HOME");
       if (home == NULL) {
         home = "/";
       }
@@ -136,77 +143,170 @@ int run_command(const char * command, char * output, int output_size) {
       fprintf(stderr, "Usage: source <file>\n");
       result = 1;
     } else {
-      FILE * file = fopen(args[1], "r");
+      FILE *file = fopen(args[1], "r");
       if (file == NULL) {
-        // error opening file
         perror(args[1]);
         result = 1;
       } else {
-        // save stdin file descriptor for later
-        int stdin_copy = dup(STDIN_FILENO);
-        if (stdin_copy == -1) {
-          perror("dup");
-          result = 1;
-        } else {
-          // redirect stdin to the file
-          if (dup2(fileno(file), STDIN_FILENO) == -1) {
-            perror("dup2");
-            result = 1;
-          } else {
-            char line[MAX_COMMAND_LENGTH];
-            while (fgets(line, MAX_COMMAND_LENGTH, stdin) != NULL) {
-              line[strcspn(line, "\n")] = '\0'; // remove newline from input
-              if (strlen(line) > 0) {
-                // only process non-empty lines
-                int line_result = run_command(line, output, output_size);
-                if (line_result != 0) {
-                  // an error occurred, stop processing the file
-                  result = line_result;
-                  break;
-                }
-              }
-            }
-          }
-          // restore stdin to its original file descriptor
-          if (dup2(stdin_copy, STDIN_FILENO) == -1) {
-            perror("dup2");
-            result = 1;
-          }
-          close(stdin_copy);
+        char buffer[MAX_COMMAND_LENGTH];
+        while (fgets(buffer, MAX_COMMAND_LENGTH, file)) {
+          run_command(buffer, output, output_size);
         }
         fclose(file);
       }
     }
-  } else if (strcmp(args[0], "help") == 0) {
-    display_help();
   } else {
-    pid_t pid = fork();
-    if (pid == 0) {
-      // child process
-      if (execvp(args[0], args) == -1) {
+    if (is_pipeline) {
+      if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return 1;
+      }
+      int pid1 = fork();
+      if (pid1 == 0) {
+        // Child process - write to pipe
+        if (close(pipefd[0]) == -1) {
+          perror("close");
+          exit(1);
+        }
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+          perror("dup2");
+          exit(1);
+        }
+        if (close(pipefd[1]) == -1) {
+          perror("close");
+          exit(1);
+        }
+        execvp(args[0], args);
         perror(args[0]);
         exit(1);
+      } else if (pid1 == -1) {
+        perror("fork");
+        return 1;
+      } else {
+        int pid2 = fork();
+        if (pid2 == 0) {
+          // Child process - read from pipe
+          if (close(pipefd[1]) == -1) {
+            perror("close");
+            exit(1);
+          }
+          if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+            perror("dup2");
+            exit(1);
+          }
+          if (close(pipefd[0]) == -1) {
+            perror("close");
+            exit(1);
+          }
+          execvp(args[num_args-1], args+(num_args-1));
+          perror(args[num_args-1]);
+          exit(1);
+        } else if (pid2 == -1) {
+          perror("fork");
+          return 1;
+        } else {
+          if (close(pipefd[0]) == -1) {
+            perror("close");
+            return 1;
+          }
+          if (close(pipefd[1]) == -1) {
+            perror("close");
+            return 1;
+          }
+          if (waitpid(pid1, &status, 0) == -1) {
+            perror("waitpid");
+            return 1;
+          }
+          if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            result = 1;
+          }
+          if (waitpid(pid2, &status, 0) == -1) {
+            perror("waitpid");
+            return 1;
+          }
+          if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            result = 1;
+          }
+        }
       }
-    } else if (pid == -1) {
-      perror("fork");
-      result = 1;
     } else {
-      // parent process
-      if (waitpid(pid, & status, 0) == -1) {
-        perror("waitpid");
+      int pid = fork();
+      if (pid == 0) {
+        // Child process
+        execvp(args[0], args);
+        perror(args[0]);
+        exit(1);
+      } else if (pid == -1) {
+        perror("fork");
         result = 1;
+      } else {
+        // Parent process
+        if (waitpid(pid, &status, 0) == -1) {
+          perror("waitpid");
+          result = 1;
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+          result = 1;
+        }
       }
     }
+    if (output != NULL) {
+  int output_len = strlen(previous_output);
+  if (output_len > output_size - 1) {
+    output_len = output_size - 1;
   }
-
-  // free memory allocated for arguments
-  for (int i = 0; i < num_args; i++) {
-    free(args[i]);
-  }
-
-  return result;
+  strncpy(output, previous_output, output_len);
+  output[output_len] = '\0';
 }
 
+if (is_pipeline) {
+  // read from pipe and execute next command
+  if (close(pipefd[1]) == -1) {
+    perror("close");
+    exit(1);
+  }
+
+  int pid2 = fork();
+  if (pid2 == -1) {
+    perror("fork");
+    result = 1;
+  } else if (pid2 == 0) {
+    if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+      perror("dup2");
+      exit(1);
+    }
+    if (close(pipefd[0]) == -1) {
+      perror("close");
+      exit(1);
+    }
+    int next_result = run_command(token_pos + 1, NULL, 0);
+    exit(next_result);
+  } else {
+    if (waitpid(pid2, &status, 0) == -1) {
+      perror("waitpid");
+      result = 1;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      result = 1;
+    }
+  }
+}
+
+if (result == 0 && output != NULL) {
+  int output_len = strlen(previous_output);
+  if (output_len > output_size - 1) {
+    output_len = output_size - 1;
+  }
+  strncpy(output, previous_output, output_len);
+  output[output_len] = '\0';
+}
+
+return result;
+}
+}
+
+            
+        
 int
 run_commands(const char * commands, char * output, int output_size) {
   char command[MAX_COMMAND_LENGTH];
@@ -353,3 +453,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+
