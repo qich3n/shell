@@ -43,7 +43,9 @@ int run_command(const char *command, char *output, int output_size) {
   static char previous_command[MAX_COMMAND_LENGTH] = "";
   static char previous_output[MAX_OUTPUT_LENGTH] = "";
 
+  int is_background = 0;
   char *args[MAX_ARGS];
+  char *args2[MAX_ARGS];
   int num_args = 0;
   int result = 0;
   int in_quotes = 0;
@@ -141,82 +143,74 @@ int run_command(const char *command, char *output, int output_size) {
     if (num_args == 1) {
       // no file name provided
       fprintf(stderr, "Usage: source <file>\n");
-      result = 1;
-    } else {
+      result = 1;  } else {
       FILE *file = fopen(args[1], "r");
       if (file == NULL) {
         perror(args[1]);
         result = 1;
       } else {
-        char buffer[MAX_COMMAND_LENGTH];
-        while (fgets(buffer, sizeof(buffer), file)) {
-          if (run_command(buffer, output, output_size) != 0) {
-            result = 1;
-            break;
+        char line[MAX_COMMAND_LENGTH];
+        while (fgets(line, sizeof(line), file) != NULL) {
+          line[strcspn(line, "\n")] = '\0'; // remove trailing newline
+          if (strlen(line) > 0 && line[0] != '#') {
+            int ret = run_command(line, output, output_size);
+            if (ret != 0) {
+              result = ret;
+              break;
+            }
           }
         }
         fclose(file);
       }
-  }
-  }else {
-    int pid = fork();
+    }
+  } else {
+    // execute the command
+    pid_t pid = fork();
     if (pid == 0) {
+      // child process
       if (is_pipeline) {
         if (pipe(pipefd) == -1) {
           perror("pipe");
           exit(1);
         }
-
-        int pid1 = fork();
-        if (pid1 == 0) {
-          // child process for the first command
+        pid_t pid2 = fork();
+        if (pid2 == 0) {
+          // grandchild process
           if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
             perror("dup2");
             exit(1);
           }
-          close(pipefd[0]);
-          close(pipefd[1]);
+          if (close(pipefd[0]) == -1) {
+            perror("close");
+            exit(1);
+          }
+          if (close(pipefd[1]) == -1) {
+            perror("close");
+            exit(1);
+          }
           execvp(args[0], args);
           perror(args[0]);
           exit(1);
-        } else if (pid1 == -1) {
+        } else if (pid2 == -1) {
           perror("fork");
-          exit(1);
+          result = 1;
         } else {
-          // parent process
-          int pid2 = fork();
-          if (pid2 == 0) {
-            // child process for the second command
-            if (dup2(pipefd[0], STDIN_FILENO) == -1) {
-              perror("dup2");
-              exit(1);
-            }
-            close(pipefd[0]);
-            close(pipefd[1]);
-            char *cmd = token_pos + 1;
-            while (*cmd == ' ') {
-              cmd++;
-            }
-            char *new_args[] = {"sh", "-c", cmd, NULL};
-            execvp(new_args[0], new_args);
-            perror(new_args[0]);
+          // child process
+          if (dup2(pipefd[0], STDIN_FILENO) == -1) {
+            perror("dup2");
             exit(1);
-          } else if (pid2 == -1) {
-            perror("fork");
-            exit(1);
-          } else {
-            // parent process
-            close(pipefd[0]);
-            close(pipefd[1]);
-            waitpid(pid1, &status, 0);
-            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-              result = 1;
-            }
-            waitpid(pid2, &status, 0);
-            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-              result = 1;
-            }
           }
+          if (close(pipefd[0]) == -1) {
+            perror("close");
+            exit(1);
+          }
+          if (close(pipefd[1]) == -1) {
+            perror("close");
+            exit(1);
+          }
+          execvp(args2[0], args2);
+          perror(args2[0]);
+          exit(1);
         }
       } else {
         execvp(args[0], args);
@@ -227,9 +221,14 @@ int run_command(const char *command, char *output, int output_size) {
       perror("fork");
       result = 1;
     } else {
-      waitpid(pid, &status, 0);
-      if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        result = 1;
+      // parent process
+      if (!is_background) {
+        waitpid(pid, &status, 0);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+          result = 1;
+        }
+      } else {
+        printf("Background process started with pid %d\n", pid);
       }
     }
   }
