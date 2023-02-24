@@ -1,11 +1,7 @@
 #include <stdio.h>
-
 #include <stdlib.h>
-
 #include <string.h>
-
 #include <unistd.h>
-
 #include <sys/wait.h>
 
 #define MAX_COMMAND_LENGTH 255
@@ -160,31 +156,31 @@ int run_command(const char * command, char * output, int output_size) {
   return result;
 }
 
-int run_commands(const char * commands, char * output, int output_size) {
+int run_commands(const char *commands, char *output, int output_size) {
   char command[MAX_COMMAND_LENGTH];
   int num_commands = 1;
-  const char * p = commands;
+  const char *p = commands;
   // count the number of commands
-  while ( * p != '\0') {
-    if ( * p == ';') {
+  while (*p != '\0') {
+    if (*p == ';') {
       num_commands++;
     }
     p++;
   }
   // allocate an array to hold the commands
-  char * command_list[num_commands];
+  char *command_list[num_commands];
 
   // split the commands into the array
   int i = 0;
   p = commands;
-  while ( * p != '\0' && i < num_commands) {
+  while (*p != '\0' && i < num_commands) {
     int j = 0;
     int in_quotes = 0;
-    while ( * p != '\0' && ( * p != ';' || in_quotes)) {
-      if ( * p == '"' || * p == '\'') {
+    while (*p != '\0' && (*p != ';' || in_quotes)) {
+      if (*p == '"' || *p == '\'') {
         in_quotes = !in_quotes;
       }
-      command[j] = * p;
+      command[j] = *p;
       j++;
       p++;
     }
@@ -194,7 +190,7 @@ int run_commands(const char * commands, char * output, int output_size) {
       strncpy(command_list[i], command, j + 1);
       i++;
     }
-    if ( * p == ';') {
+    if (*p == ';') {
       p++;
     }
   }
@@ -229,6 +225,7 @@ int run_commands(const char * commands, char * output, int output_size) {
 
   return WIFEXITED(result) ? WEXITSTATUS(result) : -1;
 }
+
 
 int main(int argc, char ** argv) {
   printf("Welcome to mini-shell.\n");
