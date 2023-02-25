@@ -39,11 +39,12 @@ int run_command(const char *command, char *output, int output_size)
 	static char previous_command[MAX_COMMAND_LENGTH] = "";
 	static char previous_output[MAX_OUTPUT_LENGTH] = "";
 
+	int is_background = 0;
 	char *args[MAX_ARGS];
+	char *args2[MAX_ARGS];
 	int num_args = 0;
 	int result = 0;
 	int in_quotes = 0;
-	char quote_char = '\0';
 	char *arg = NULL;
 	const char *p = command;
 	int status;
@@ -59,17 +60,7 @@ int run_command(const char *command, char *output, int output_size)
 	while (*p != '\0')
 	{
 		char c = *p;
-		if ((c == '"' || c == '\'') && !in_quotes)
-		{
-			in_quotes = 1;
-			quote_char = c;
-		}
-		else if (c == quote_char)
-		{
-			in_quotes = 0;
-			quote_char = '\0';
-		}
-		else if (c == ' ' && !in_quotes)
+		if (c == ' ' && !in_quotes)
 		{
 			if (arg != NULL)
 			{
@@ -77,6 +68,17 @@ int run_command(const char *command, char *output, int output_size)
 				num_args++;
 				arg = NULL;
 			}
+		}
+		else if (c == '"' || c == '\'')
+		{
+			if (in_quotes && arg != NULL)
+			{
+				args[num_args] = arg;
+				num_args++;
+				arg = NULL;
+			}
+
+			in_quotes = !in_quotes;
 		}
 		else if (c == '<' && !in_quotes)
 		{
@@ -187,17 +189,17 @@ int run_command(const char *command, char *output, int output_size)
 			else
 			{
 				char line[MAX_COMMAND_LENGTH];
-				while (fgets(line, MAX_COMMAND_LENGTH, file) != NULL)
+				while (fgets(line, sizeof(line), file) != NULL)
 				{
-					if (line[strlen(line) - 1] == '\n')
+					line[strcspn(line, "\n")] = '\0';	// remove trailing newline
+					if (strlen(line) > 0 && line[0] != '#')
 					{
-						line[strlen(line) - 1] = '\0';
-					}
-
-					result = run_command(line, output, output_size);
-					if (result != 0)
-					{
-						break;
+						int ret = run_command(line, output, output_size);
+						if (ret != 0)
+						{
+							result = ret;
+							break;
+						}
 					}
 				}
 
@@ -207,7 +209,7 @@ int run_command(const char *command, char *output, int output_size)
 	}
 	else
 	{
-		// execute other commands
+		// execute the command
 		pid_t pid = fork();
 		if (pid == 0)
 		{
@@ -220,48 +222,65 @@ int run_command(const char *command, char *output, int output_size)
 					exit(1);
 				}
 
-				pid_t child_pid = fork();
-				if (child_pid == 0)
+				pid_t pid2 = fork();
+				if (pid2 == 0)
 				{
-				 		// child process
-					close(pipefd[0]);	// close read end of pipe
+				 		// grandchild process
 					if (dup2(pipefd[1], STDOUT_FILENO) == -1)
 					{
 						perror("dup2");
 						exit(1);
 					}
 
-					close(pipefd[1]);
+					if (close(pipefd[0]) == -1)
+					{
+						perror("close");
+						exit(1);
+					}
+
+					if (close(pipefd[1]) == -1)
+					{
+						perror("close");
+						exit(1);
+					}
+
 					execvp(args[0], args);
 					perror(args[0]);
 					exit(1);
 				}
-				else if (child_pid == -1)
+				else if (pid2 == -1)
 				{
 					perror("fork");
-					exit(1);
+					result = 1;
 				}
 				else
 				{
-				 		// parent process
-					close(pipefd[1]);	// close write end of pipe
+				 		// child process
 					if (dup2(pipefd[0], STDIN_FILENO) == -1)
 					{
 						perror("dup2");
 						exit(1);
 					}
 
-					close(pipefd[0]);
-					if (waitpid(child_pid, &status, 0) == -1)
+					if (close(pipefd[0]) == -1)
 					{
-						perror("waitpid");
+						perror("close");
 						exit(1);
 					}
+
+					if (close(pipefd[1]) == -1)
+					{
+						perror("close");
+						exit(1);
+					}
+
+					execvp(args2[0], args2);
+					perror(args2[0]);
+					exit(1);
 				}
 			}
 			else
 			{
-			 	// not a pipeline
 				execvp(args[0], args);
 				perror(args[0]);
 				exit(1);
@@ -275,15 +294,17 @@ int run_command(const char *command, char *output, int output_size)
 		else
 		{
 			// parent process
-			if (waitpid(pid, &status, 0) == -1)
+			if (!is_background)
 			{
-				perror("waitpid");
-				result = 1;
+				waitpid(pid, &status, 0);
+				if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+				{
+					result = 1;
+				}
 			}
-
-			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			else
 			{
-				result = 1;
+				printf("Background process started with pid %d\n", pid);
 			}
 		}
 	}
@@ -436,8 +457,8 @@ int main(int argc, char **argv)
 				}
 
 				// save the previous command and its output as the previous previous command and output
-				strncpy(previous_output, previous_command, MAX_COMMAND_LENGTH);
-				strncpy(previous_command, command, MAX_COMMAND_LENGTH);
+				strncpy(previous_output, output, MAX_OUTPUT_LENGTH);
+				output[0] = '\0';
 			}
 			else
 			{
