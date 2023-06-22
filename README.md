@@ -1,7 +1,3 @@
-# Project 1: Shell
-
-This is the starter code for [Project 1](https://course.ccs.neu.edu/cs3650sp23/p1.html).
-
 The [Makefile](Makefile) contains the following targets:
 
 - `make all` - compile everything
@@ -12,5 +8,5 @@ The [Makefile](Makefile) contains the following targets:
 - `make test` - compile and run all the tests
 - `make clean` - perform a minimal clean-up of the source tree
 
+Albeit some functions may not be working, this code still performs the overall basics of a shell system along with a tokenizer. Please refrain from plagerism and use this code as a form of inspiration for your own personal project.
 
-The [examples](examples/) directory contains an example tokenizer. It might help.
